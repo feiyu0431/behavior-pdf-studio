@@ -6,10 +6,10 @@ await rm("dist", { recursive: true, force: true });
 await mkdir("dist", { recursive: true });
 await cp("src/index.html", "dist/index.html");
 await cp("src/styles.css", "dist/styles.css");
-const esbuild = resolve("node_modules/.bin/esbuild.cmd");
+const esbuild = resolve("node_modules/.bin", process.platform === "win32" ? "esbuild.cmd" : "esbuild");
 const result = spawnSync(
   esbuild,
   ["src/app.js", "--bundle", "--minify", "--format=iife", "--target=es2020", "--outfile=dist/app.js"],
-  { stdio: "inherit", shell: true },
+  { stdio: "inherit", shell: process.platform === "win32" },
 );
 if (result.status !== 0) process.exit(result.status ?? 1);

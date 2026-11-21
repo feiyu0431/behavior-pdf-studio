@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="批量生成水迷宫与旷场实验的轨迹图和空间占用热图 PDF。" />
+    <title>行为轨迹 PDF 工作台</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230e4f7a'/%3E%3Cpath d='M18 43V28m14 15V17m14 26V23' stroke='white' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div>
+        <p class="eyebrow">BEHAVIOR PLOT STUDIO</p>
+        <h1>行为轨迹 PDF 工作台</h1>
+      </div>
+      <div class="privacy-pill">本地处理 · 数据不上传</div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="kicker">从原始坐标到可下载图件</p>
+          <h2>批量生成 track plot<br />与空间占用热图</h2>
+          <p class="hero-copy">支持 MWM 水迷宫与 OF 旷场坐标。统一速度色标、批次热图色标，并将全部 PDF 打包下载。</p>
+        </div>
+        <div class="hero-graphic" aria-hidden="true">
+          <div class="pool"><div class="platform"></div><svg viewBox="0 0 220 220"><path d="M24 78 C70 18, 86 181, 120 65 S173 164, 199 71 M40 164 C67 116, 112 189, 159 108 S192 73, 202 145" /></svg></div>
+          <div class="heat-dot dot-a"></div><div class="heat-dot dot-b"></div>
+        </div>
+      </section>
+
+      <section class="workspace" aria-labelledby="workflow-title">
+        <div class="workspace-head">
+          <div><p class="step-label">01 · 选择实验</p><h3 id="workflow-title">建立本批次参数</h3></div>
+          <div class="experiment-switch" role="group" aria-label="实验类型">
+            <button class="experiment active" data-kind="mwm" type="button"><strong>MWM</strong><span>水迷宫</span></button>
+            <button class="experiment" data-kind="of" type="button"><strong>OF</strong><span>旷场</span></button>
+          </div>
+        </div>
+
+        <div class="upload-grid">
+          <div>
+            <p class="step-label">02 · 上传坐标</p>
+            <label class="dropzone" id="dropzone" for="file-input">
+              <input id="file-input" type="file" accept=".csv,text/csv" multiple />
+              <span class="upload-icon" aria-hidden="true">＋</span>
+              <strong>拖入 CSV，或点击选择</strong>
+              <span>支持一次上传多个逐帧坐标文件</span>
+            </label>
+            <p class="upload-note" id="format-note">MWM：支持原始 “x,y” 坐标流及标准 x、y 列 CSV；负坐标按追踪丢失处理。</p>
+          </div>
+
+          <aside class="settings-card">
+            <div class="card-title"><p class="step-label">03 · 输出设置</p><span>已按实验预设</span></div>
+            <dl>
+              <div><dt>帧率</dt><dd>20 fps</dd></div>
+              <div><dt>速度上限</dt><dd>120 px/s</dd></div>
+              <div><dt>热图刻度</dt><dd>0.00–1.00</dd></div>
+              <div><dt>输出格式</dt><dd>PDF + ZIP</dd></div>
+            </dl>
+            <p>同一批次热图共用色标，便于样本间比较。</p>
+          </aside>
+        </div>
+
+        <div class="file-panel" id="file-panel" hidden>
+          <div class="file-panel-head"><div><span id="file-count">0 个文件</span><small id="valid-count">等待解析</small></div><button id="clear-files" class="text-button" type="button">清空</button></div>
+          <ul id="file-list" aria-live="polite"></ul>
+        </div>
+
+        <div class="action-row">
+          <button id="generate" class="primary" type="button" disabled>生成全部 PDF</button>
+          <p id="status" role="status">请选择实验类型并上传坐标 CSV。</p>
+        </div>
+
+        <div class="progress-wrap" id="progress-wrap" hidden>
+          <div class="progress-track"><div id="progress-bar"></div></div>
+          <span id="progress-text">0%</span>
+        </div>
+      </section>
+
+      <section class="results" id="results" hidden aria-labelledby="results-title">
+        <div class="results-head"><div><p class="step-label">04 · 下载结果</p><h3 id="results-title">PDF 已生成</h3></div><button id="download-zip" class="download-all" type="button">下载全部 ZIP</button></div>
+        <div class="preview-grid" id="preview-grid"></div>
+        <div class="download-list" id="download-list"></div>
+      </section>
+
+      <section class="method-note">
+        <div><p class="step-label">处理说明</p><h3>与桌面脚本一致的核心规则</h3></div>
+        <div class="method-grid">
+          <article><span>轨迹</span><p>相邻有效帧计算瞬时速度；追踪丢失保留为断点，不跨缺失区连线。</p></article>
+          <article><span>热图</span><p>高斯平滑空间占用密度；每批次使用统一阈值，并显示 0–1 相对占用。</p></article>
+          <article><span>隐私</span><p>解析、绘图与压缩均在当前浏览器执行，原始 CSV 不发送到服务器。</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer><span>Behavior Plot Studio</span><span>MWM · OF · PDF</span></footer>
+    <script src="./app.js"></script>
+  </body>
+</html>

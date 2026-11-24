@@ -29,6 +29,39 @@ function interpolatePalette(palette, value) {
   return a.map((channel, i) => Math.round(channel + (b[i] - channel) * fraction));
 }
 
+function numericInput(selector, label, minimum, fallback = null) {
+  const raw = $(selector).value.trim();
+  if (!raw && fallback !== null) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < minimum) throw new Error(`${label}必须不小于 ${minimum}`);
+  return value;
+}
+
+function optionalPositiveInput(selector, label) {
+  const raw = $(selector).value.trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${label}必须大于 0，或留空使用自动范围`);
+  return value;
+}
+
+function currentPlotOptions() {
+  return {
+    fps: numericInput("#fps", "帧率", 1),
+    speedMax: numericInput("#speed-max", "速度上限", 1),
+    lineWidth: numericInput("#line-width", "轨迹线宽", 0.2),
+    smoothUnits: numericInput("#heat-smoothing", "热图平滑半径", 1),
+    heatMax: optionalPositiveInput("#heat-max", "热图色标上限"),
+    excludeFastPoints: $("#exclude-fast-points").checked,
+  };
+}
+
+function densityFormat(value) {
+  if (value === 0) return "0";
+  if (Math.abs(value) >= 0.01 && Math.abs(value) < 100) return Number(value.toPrecision(3)).toString();
+  return value.toExponential(2).replace("e-", "e−");
+}
+
 function setupCanvas() {
   const canvas = document.createElement("canvas");
   canvas.width = 1600;
@@ -104,7 +137,7 @@ function drawColorbar(ctx, palette, label, ticks, formatter) {
   ctx.save(); ctx.translate(1515, y + height / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.font = "28px Arial, sans-serif"; ctx.fillText(label, 0, 0); ctx.restore();
 }
 
-function drawTrack(points, kind, name) {
+function drawTrack(points, kind, name, options) {
   const { canvas, ctx } = setupCanvas();
   const p = projector(kind);
   drawTitle(ctx, `${kind === "mwm" ? "Morris water maze" : "Open field test"} – ${name}`);
@@ -113,15 +146,15 @@ function drawTrack(points, kind, name) {
     const cfg = SETTINGS.mwm; const cx = p.x(cfg.cx); const cy = p.y(cfg.cy); const radius = (cfg.radius / (p.xmax - p.xmin)) * p.size;
     ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.clip();
   } else { ctx.beginPath(); ctx.rect(p.left, p.top, p.size, p.size); ctx.clip(); }
-  ctx.lineWidth = 2.2;
-  for (const segment of createSpeedSegments(points)) {
-    const [r, g, b] = interpolatePalette(speedPalette, segment.speed / SETTINGS.speedMax);
+  ctx.lineWidth = 2.2 * options.lineWidth;
+  for (const segment of createSpeedSegments(points, options.fps)) {
+    const [r, g, b] = interpolatePalette(speedPalette, segment.speed / options.speedMax);
     ctx.strokeStyle = `rgb(${r},${g},${b})`;
     ctx.beginPath(); ctx.moveTo(p.x(segment.x1), p.y(segment.y1)); ctx.lineTo(p.x(segment.x2), p.y(segment.y2)); ctx.stroke();
   }
   ctx.restore();
   drawArena(ctx, kind);
-  drawColorbar(ctx, speedPalette, "Speed (px/s)", [0, 30, 60, 90, 120].map((value) => ({ value, position: value / 120 })), (value) => String(value));
+  drawColorbar(ctx, speedPalette, "Speed (px/s)", [0, .25, .5, .75, 1].map((position) => ({ value: position * options.speedMax, position })), (value) => densityFormat(value));
   return canvas;
 }
 
@@ -146,7 +179,7 @@ function drawHeatmap(occupancy, sharedMaximum, kind, name) {
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
   ctx.drawImage(heatCanvas, p.left, p.top, p.size, p.size);
   drawArena(ctx, kind);
-  drawColorbar(ctx, heatPalette, "Relative occupancy (0–1)", [0, .25, .5, .75, 1].map((value) => ({ value, position: value })), (value) => value.toFixed(2));
+  drawColorbar(ctx, heatPalette, "Dwell density (s/px²)", [0, .25, .5, .75, 1].map((position) => ({ value: position * sharedMaximum, position })), densityFormat);
   return canvas;
 }
 
@@ -199,16 +232,17 @@ function downloadBlob(blob, filename) {
 async function generateAll() {
   $("#generate").disabled = true; $("#download-zip").disabled = true; releaseUrls(); state.outputs = [];
   try {
-    setProgress(0, state.parsed.length * 3, "正在计算空间占用…");
+    const options = currentPlotOptions();
+    setProgress(0, state.parsed.length * 3, "正在计算停留时间密度…");
     const occupancies = [];
     for (let i = 0; i < state.parsed.length; i += 1) {
-      occupancies.push(createOccupancy(state.parsed[i].points, state.kind));
+      occupancies.push(createOccupancy(state.parsed[i].points, state.kind, options));
       setProgress(i + 1, state.parsed.length * 3, `正在计算热图 ${i + 1}/${state.parsed.length}`); await nextPaint();
     }
-    const maximum = sharedHeatMaximum(occupancies); const zip = new JSZip();
+    const maximum = sharedHeatMaximum(occupancies, options.heatMax); const zip = new JSZip();
     for (let i = 0; i < state.parsed.length; i += 1) {
       const sample = state.parsed[i];
-      const trackCanvas = drawTrack(sample.points, state.kind, sample.name); const trackBlob = canvasToPdf(trackCanvas);
+      const trackCanvas = drawTrack(sample.points, state.kind, sample.name, options); const trackBlob = canvasToPdf(trackCanvas);
       state.outputs.push({ name: `${sample.name}_track.pdf`, folder: "track_plot", blob: trackBlob, preview: trackCanvas.toDataURL("image/jpeg", .72) });
       zip.file(`track_plot/${sample.name}_track.pdf`, trackBlob);
       setProgress(state.parsed.length + i + 1, state.parsed.length * 3, `正在生成轨迹 PDF ${i + 1}/${state.parsed.length}`); await nextPaint();
@@ -237,6 +271,9 @@ function renderResults() {
 
 document.querySelectorAll(".experiment").forEach((button) => button.addEventListener("click", async () => {
   document.querySelectorAll(".experiment").forEach((item) => item.classList.toggle("active", item === button)); state.kind = button.dataset.kind;
+  $("#speed-max").value = SETTINGS[state.kind].speedMax;
+  $("#heat-smoothing").value = SETTINGS[state.kind].smoothUnits;
+  $("#heat-max").value = "";
   $("#format-note").textContent = state.kind === "mwm" ? "MWM：支持原始 “x,y” 坐标流及标准 x、y 列 CSV；负坐标按追踪丢失处理。" : "OF：请上传逐帧 x,y 坐标文件；统计汇总、事件与其他行为表会被自动拒绝。";
   if (state.files.length) await loadFiles(state.files);
 }));

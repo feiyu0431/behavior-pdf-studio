@@ -9,11 +9,13 @@ export const SETTINGS = {
     xRange: [-3, 533],
     yRange: [2, 538],
     smoothUnits: 12,
+    speedMax: 120,
   },
   of: {
     xRange: [0, 200],
     yRange: [0, 200],
     smoothUnits: 15,
+    speedMax: 200,
   },
 };
 
@@ -66,13 +68,13 @@ export function transformPoints(points, kind) {
   }));
 }
 
-export function createSpeedSegments(points) {
+export function createSpeedSegments(points, fps = SETTINGS.fps) {
   const segments = [];
   for (let i = 1; i < points.length; i += 1) {
     const previous = points[i - 1];
     const current = points[i];
     if (!previous.valid || !current.valid) continue;
-    const speed = Math.hypot(current.x - previous.x, current.y - previous.y) * SETTINGS.fps;
+    const speed = Math.hypot(current.x - previous.x, current.y - previous.y) * fps;
     segments.push({ x1: previous.x, y1: previous.y, x2: current.x, y2: current.y, speed });
   }
   return segments;
@@ -118,27 +120,36 @@ function gaussianBlur(source, bins, sigma) {
   return output;
 }
 
-export function createOccupancy(points, kind) {
+export function createOccupancy(points, kind, options = {}) {
   const bins = SETTINGS.bins;
   const config = SETTINGS[kind];
+  const fps = options.fps ?? SETTINGS.fps;
+  const speedMax = options.speedMax ?? config.speedMax ?? SETTINGS.speedMax;
+  const smoothUnits = options.smoothUnits ?? config.smoothUnits;
+  const excludeFastPoints = options.excludeFastPoints ?? false;
   const [xmin, xmax] = config.xRange;
   const [ymin, ymax] = config.yRange;
   const counts = new Float32Array(bins * bins);
-  for (const point of points) {
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
     if (!point.valid) continue;
+    if (excludeFastPoints && index > 0) {
+      const previous = points[index - 1];
+      if (previous.valid) {
+        const speed = Math.hypot(point.x - previous.x, point.y - previous.y) * fps;
+        if (speed > speedMax) continue;
+      }
+    }
     let x = Math.floor(((point.x - xmin) / (xmax - xmin)) * bins);
     let y = Math.floor(((point.y - ymin) / (ymax - ymin)) * bins);
     if (point.x === xmax) x = bins - 1;
     if (point.y === ymax) y = bins - 1;
-    if (x >= 0 && x < bins && y >= 0 && y < bins) counts[y * bins + x] += 1;
+    if (x >= 0 && x < bins && y >= 0 && y < bins) counts[y * bins + x] += 1 / fps;
   }
   const binSize = (xmax - xmin) / bins;
-  const blurred = gaussianBlur(counts, bins, config.smoothUnits / binSize);
-  let total = 0;
-  for (const value of blurred) total += value;
-  if (total > 0) {
-    for (let i = 0; i < blurred.length; i += 1) blurred[i] /= total;
-  }
+  const blurred = gaussianBlur(counts, bins, smoothUnits / binSize);
+  const binArea = ((xmax - xmin) / bins) * ((ymax - ymin) / bins);
+  for (let i = 0; i < blurred.length; i += 1) blurred[i] /= binArea;
   if (kind === "mwm") {
     for (let y = 0; y < bins; y += 1) {
       const yValue = ymin + ((y + 0.5) / bins) * (ymax - ymin);
@@ -153,7 +164,8 @@ export function createOccupancy(points, kind) {
   return blurred;
 }
 
-export function sharedHeatMaximum(occupancies) {
+export function sharedHeatMaximum(occupancies, manualMaximum = null) {
+  if (Number.isFinite(manualMaximum) && manualMaximum > 0) return manualMaximum;
   const values = [];
   for (const occupancy of occupancies) {
     for (const value of occupancy) {

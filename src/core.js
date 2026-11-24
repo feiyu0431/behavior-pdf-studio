@@ -1,25 +1,25 @@
 export const SETTINGS = {
   fps: 20,
   speedMax: 120,
-  bins: 180,
+  kdeResolution: 450,
   mwm: {
     cx: 265,
     cy: 270,
     radius: 268,
     xRange: [-3, 533],
     yRange: [2, 538],
-    smoothUnits: 12,
+    kdeBandwidth: 15,
     speedMax: 120,
   },
   of: {
     xRange: [0, 200],
     yRange: [0, 200],
-    smoothUnits: 15,
+    kdeBandwidth: 15,
     speedMax: 200,
   },
 };
 
-const PAIR_RE = /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/g;
+const NUMBER_RE = /-?\d+\.?\d*/g;
 
 function decodeBytes(arrayBuffer) {
   return new TextDecoder("utf-8", { fatal: false })
@@ -47,16 +47,20 @@ function parseStandardXY(text) {
 
 export function parseCoordinateBuffer(arrayBuffer) {
   const text = decodeBytes(arrayBuffer);
-  const matches = [...text.matchAll(PAIR_RE)];
-  let raw = matches.map((match) => [Number(match[1]), Number(match[2])]);
-  if (raw.length < 100) raw = parseStandardXY(text);
+  // Keep the original R script's behaviour: extract every number and pair them
+  // in sequence. Standard x/y CSV is retained as a safe fallback.
+  const numbers = [...text.matchAll(NUMBER_RE)].map((match) => Number(match[0]));
+  let raw = [];
+  for (let index = 0; index + 1 < numbers.length; index += 2) raw.push([numbers[index], numbers[index + 1]]);
+  const standard = parseStandardXY(text);
+  if (standard.length >= 100 && (raw.length < 100 || numbers.length !== standard.length * 2)) raw = standard;
   if (raw.length < 100) {
     throw new Error("未检测到逐帧 x,y 坐标；可能是汇总表或事件表");
   }
   return raw.map(([x, y]) => ({
     x,
     y,
-    valid: Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0,
+    valid: Number.isFinite(x) && Number.isFinite(y),
   }));
 }
 
@@ -93,43 +97,71 @@ function gaussianKernel(sigma) {
   return { kernel, radius };
 }
 
-function gaussianBlur(source, bins, sigma) {
-  const { kernel, radius } = gaussianKernel(sigma);
+function gaussianBlur(source, width, height, sigmaX, sigmaY) {
+  const xKernel = gaussianKernel(sigmaX);
+  const yKernel = gaussianKernel(sigmaY);
   const horizontal = new Float32Array(source.length);
   const output = new Float32Array(source.length);
-  for (let y = 0; y < bins; y += 1) {
-    for (let x = 0; x < bins; x += 1) {
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
       let sum = 0;
-      for (let offset = -radius; offset <= radius; offset += 1) {
+      for (let offset = -xKernel.radius; offset <= xKernel.radius; offset += 1) {
         const xx = x + offset;
-        if (xx >= 0 && xx < bins) sum += source[y * bins + xx] * kernel[offset + radius];
+        if (xx >= 0 && xx < width) sum += source[y * width + xx] * xKernel.kernel[offset + xKernel.radius];
       }
-      horizontal[y * bins + x] = sum;
+      horizontal[y * width + x] = sum;
     }
   }
-  for (let y = 0; y < bins; y += 1) {
-    for (let x = 0; x < bins; x += 1) {
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
       let sum = 0;
-      for (let offset = -radius; offset <= radius; offset += 1) {
+      for (let offset = -yKernel.radius; offset <= yKernel.radius; offset += 1) {
         const yy = y + offset;
-        if (yy >= 0 && yy < bins) sum += horizontal[yy * bins + x] * kernel[offset + radius];
+        if (yy >= 0 && yy < height) sum += horizontal[yy * width + x] * yKernel.kernel[offset + yKernel.radius];
       }
-      output[y * bins + x] = sum;
+      output[y * width + x] = sum;
     }
   }
   return output;
 }
 
-export function createOccupancy(points, kind, options = {}) {
-  const bins = SETTINGS.bins;
+export function plotBounds(points, kind) {
+  const config = SETTINGS[kind];
+  if (kind === "mwm") return { xmin: config.xRange[0], xmax: config.xRange[1], ymin: config.yRange[0], ymax: config.yRange[1] };
+  const base = kdeBounds(points, kind);
+  const dx = base.xmax - base.xmin; const dy = base.ymax - base.ymin;
+  return { xmin: base.xmin - dx * 0.02, xmax: base.xmax + dx * 0.02, ymin: base.ymin - dy * 0.02, ymax: base.ymax + dy * 0.02 };
+}
+
+export function kdeBounds(points, kind) {
+  const config = SETTINGS[kind];
+  if (kind === "mwm") return { xmin: config.xRange[0], xmax: config.xRange[1], ymin: config.yRange[0], ymax: config.yRange[1] };
+  const valid = points.filter((point) => point.valid);
+  const xs = valid.map((point) => point.x); const ys = valid.map((point) => point.y);
+  let xmin = Math.min(...xs); let xmax = Math.max(...xs); let ymin = Math.min(...ys); let ymax = Math.max(...ys);
+  if (xmax === xmin) { xmin -= .5; xmax += .5; }
+  if (ymax === ymin) { ymin -= .5; ymax += .5; }
+  return { xmin, xmax, ymin, ymax };
+}
+
+function quantile(values, probability) {
+  if (!values.length) return 1;
+  values.sort((a, b) => a - b);
+  const index = (values.length - 1) * probability;
+  const lower = Math.floor(index); const upper = Math.ceil(index);
+  return values[lower] + (values[upper] - values[lower]) * (index - lower);
+}
+
+export function createKde(points, kind, options = {}) {
+  const bins = options.kdeResolution ?? SETTINGS.kdeResolution;
   const config = SETTINGS[kind];
   const fps = options.fps ?? SETTINGS.fps;
   const speedMax = options.speedMax ?? config.speedMax ?? SETTINGS.speedMax;
-  const smoothUnits = options.smoothUnits ?? config.smoothUnits;
+  const bandwidth = options.kdeBandwidth ?? config.kdeBandwidth;
   const excludeFastPoints = options.excludeFastPoints ?? false;
-  const [xmin, xmax] = config.xRange;
-  const [ymin, ymax] = config.yRange;
+  const { xmin, xmax, ymin, ymax } = kdeBounds(points, kind);
   const counts = new Float32Array(bins * bins);
+  let sampleCount = 0;
   for (let index = 0; index < points.length; index += 1) {
     const point = points[index];
     if (!point.valid) continue;
@@ -144,12 +176,16 @@ export function createOccupancy(points, kind, options = {}) {
     let y = Math.floor(((point.y - ymin) / (ymax - ymin)) * bins);
     if (point.x === xmax) x = bins - 1;
     if (point.y === ymax) y = bins - 1;
-    if (x >= 0 && x < bins && y >= 0 && y < bins) counts[y * bins + x] += 1 / fps;
+    if (x >= 0 && x < bins && y >= 0 && y < bins) { counts[y * bins + x] += 1; sampleCount += 1; }
   }
-  const binSize = (xmax - xmin) / bins;
-  const blurred = gaussianBlur(counts, bins, smoothUnits / binSize);
-  const binArea = ((xmax - xmin) / bins) * ((ymax - ymin) / bins);
-  for (let i = 0; i < blurred.length; i += 1) blurred[i] /= binArea;
+  if (!sampleCount) throw new Error("没有可用于 KDE 的有效坐标点");
+  const binWidth = (xmax - xmin) / bins; const binHeight = (ymax - ymin) / bins;
+  // MASS::kde2d applies h / 4 internally. The binned convolution below is the
+  // browser equivalent of its two-dimensional Gaussian KDE.
+  const sigma = bandwidth / 4;
+  const blurred = gaussianBlur(counts, bins, bins, sigma / binWidth, sigma / binHeight);
+  const binArea = binWidth * binHeight;
+  for (let i = 0; i < blurred.length; i += 1) blurred[i] /= sampleCount * binArea;
   if (kind === "mwm") {
     for (let y = 0; y < bins; y += 1) {
       const yValue = ymin + ((y + 0.5) / bins) * (ymax - ymin);
@@ -161,20 +197,8 @@ export function createOccupancy(points, kind, options = {}) {
       }
     }
   }
-  return blurred;
-}
-
-export function sharedHeatMaximum(occupancies, manualMaximum = null) {
-  if (Number.isFinite(manualMaximum) && manualMaximum > 0) return manualMaximum;
-  const values = [];
-  for (const occupancy of occupancies) {
-    for (const value of occupancy) {
-      if (Number.isFinite(value) && value > 0) values.push(value);
-    }
-  }
-  if (!values.length) return 1;
-  values.sort((a, b) => a - b);
-  return values[Math.min(values.length - 1, Math.floor(values.length * 0.995))];
+  const values = [...blurred].filter((value) => Number.isFinite(value));
+  return { values: blurred, bins, bounds: { xmin, xmax, ymin, ymax }, upper: quantile(values, options.kdeQuantile ?? 0.98) };
 }
 
 export function safeStem(filename) {

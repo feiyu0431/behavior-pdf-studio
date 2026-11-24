@@ -49,7 +49,7 @@
               <strong>拖入 CSV，或点击选择</strong>
               <span>支持一次上传多个逐帧坐标文件</span>
             </label>
-            <p class="upload-note" id="format-note">MWM：支持原始 “x,y” 坐标流及标准 x、y 列 CSV；负坐标按追踪丢失处理。</p>
+            <p class="upload-note" id="format-note">MWM：支持原始 “x,y” 坐标流及标准 x、y 列 CSV。</p>
           </div>
 
           <aside class="settings-card">
@@ -58,11 +58,11 @@
               <label><span>帧率</span><output><input id="fps" type="number" value="20" min="1" max="240" step="1" /> fps</output></label>
               <label><span>速度上限</span><output><input id="speed-max" type="number" value="120" min="1" max="5000" step="1" /> px/s</output></label>
               <label><span>轨迹线宽</span><output><input id="line-width" type="number" value="1.0" min="0.2" max="5" step="0.1" /> ×</output></label>
-              <label><span>热图平滑半径</span><output><input id="heat-smoothing" type="number" value="12" min="1" max="100" step="1" /> px</output></label>
-              <label><span>热图归一化上限</span><output><input id="heat-max" type="number" placeholder="自动" min="0" step="any" /> s/px²</output></label>
+              <label><span>KDE 带宽 h</span><output><input id="heat-smoothing" type="number" value="15" min="0.1" max="100" step="0.1" /> px</output></label>
+              <label><span>热图截断分位数</span><output><input id="heat-quantile" type="number" value="98" min="50" max="100" step="0.1" /> %</output></label>
             </div>
             <label class="check-control"><input id="exclude-fast-points" type="checkbox" /><span>热图排除超过速度上限的相邻帧</span></label>
-            <p>热图先按停留时间密度计算，再用全批次共同上限映射为 Density 0–1；空白时自动取 99.5% 分位数。</p>
+            <p>热图遵循原始 R：二维 KDE（n = 450）、h = 15、每个样本 98% 分位截断，Density 映射为 0–1。</p>
           </aside>
         </div>
 
@@ -92,7 +92,7 @@
         <div><p class="step-label">处理说明</p><h3>与桌面脚本一致的核心规则</h3></div>
         <div class="method-grid">
           <article><span>轨迹</span><p>相邻有效帧计算瞬时速度；追踪丢失保留为断点，不跨缺失区连线。</p></article>
-          <article><span>热图</span><p>每个有效帧按 1/帧率秒累计并高斯平滑；全批次以同一上限归一化，Density 色标为 0–1。</p></article>
+          <article><span>热图</span><p>按 MASS::kde2d 的二维高斯 KDE 绘制；每个样本独立按设定分位数截断并归一化为 Density 0–1。</p></article>
           <article><span>隐私</span><p>解析、绘图与压缩均在当前浏览器执行，原始 CSV 不发送到服务器。</p></article>
         </div>
       </section>

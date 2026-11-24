@@ -179,7 +179,7 @@ function drawHeatmap(occupancy, sharedMaximum, kind, name) {
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
   ctx.drawImage(heatCanvas, p.left, p.top, p.size, p.size);
   drawArena(ctx, kind);
-  drawColorbar(ctx, heatPalette, "Dwell density (s/px²)", [0, .25, .5, .75, 1].map((position) => ({ value: position * sharedMaximum, position })), densityFormat);
+  drawColorbar(ctx, heatPalette, "Density", [0, .25, .5, .75, 1].map((position) => ({ value: position, position })), (value) => value.toFixed(2));
   return canvas;
 }
 
